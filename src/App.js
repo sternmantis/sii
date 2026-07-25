@@ -25,7 +25,7 @@ export function App(root) {
     if (!state.myId) {
       root.innerHTML = `
         <div class="lobby">
-          <h2>P2P Card Game</h2>
+          <h2>Slip It In</h2>
           <button id="createBtn">Create Game (Host)</button>
           <div class="join-row">
             <input id="hostIdInput" placeholder="Host ID" maxlength="5" />
