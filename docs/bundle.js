@@ -7,7 +7,7 @@
 // information is not achievable without a trusted server. This keeps the
 // deck out of the *rendered UI* only — each player still just sees their
 // own dealt hand and the shared board.
-  const MASTER_DECK = [
+const MASTER_DECK = [
   "pocket jerky", "man glitter", "gravy tuxedo", "emotional lasagna",
   "backup mustache", "car jerky", "beef curtains", "moon jerky",
   "wizard chili", "goblin taxes", "raccoon dues", "thunder cape",
@@ -134,7 +134,7 @@ const HAND_SIZE = 5;
 
   const state = {
     peer: null, myId: null, myName: null, isHost: false, hostConn: null,
-    conns: {}, players: [], hand: [], pendingCompleteId: null, pool: [],
+    conns: {}, players: [], hand: [], handSize: HAND_SIZE, pendingCompleteId: null,
     gameStarted: false, gameOver: false, winnerName: null,
     autoJoining: false, pendingHostId: null, joinError: null
   };
@@ -190,10 +190,22 @@ const HAND_SIZE = 5;
           <p>You are: <strong>${state.myName || 'assigning your name...'}</strong></p>
           <h4>Players (${state.players.length})</h4>
           <ul>${state.players.map(p => `<li>${p.name}${p.id === state.myId ? ' (you)' : ''}</li>`).join('')}</ul>
+          ${state.isHost ? `
+            <div class="hand-size-row">
+              <label for="handSizeSelect">Cards per hand:</label>
+              <select id="handSizeSelect">
+                <option value="3" ${state.handSize === 3 ? 'selected' : ''}>3</option>
+                <option value="5" ${state.handSize === 5 ? 'selected' : ''}>5</option>
+                <option value="10" ${state.handSize === 10 ? 'selected' : ''}>10</option>
+              </select>
+            </div>` : ''}
           ${state.isHost ? `<button id="startBtn" ${state.players.length < 2 ? 'disabled' : ''}>Start Game</button>` : ''}
         </div>`;
       if (state.isHost) {
         root.querySelector('#startBtn').onclick = startGame;
+        root.querySelector('#handSizeSelect').onchange = (e) => {
+          state.handSize = Number(e.target.value);
+        };
         const copyBtn = root.querySelector('#copyLinkBtn');
         copyBtn.onclick = () => {
           const link = window.location.origin + window.location.pathname + '?host=' + state.myId;
@@ -323,9 +335,10 @@ const HAND_SIZE = 5;
 
   function attachHostConnectionHandler(peer) {
     peer.on('connection', (conn) => {
-      conn.on('open', () => {
-        state.conns[conn.peer] = conn;
-      });
+      // Registered immediately (not inside conn.on('open')) so a
+      // message that arrives right at connection time can never race
+      // ahead of state.conns being populated for this player.
+      state.conns[conn.peer] = conn;
       conn.on('data', (msg) => handleHostMessage(conn, msg));
       conn.on('close', () => {
         removePlayer(conn.peer);
@@ -345,7 +358,6 @@ const HAND_SIZE = 5;
       schedulePendingComplete(conn.peer, msg.cardId, msg.card);
     } else if (msg.type === 'requestSlip') {
       const newCard = drawReplacement();
-      addToPool(msg.oldCard);
       conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
     } else if (msg.type === 'handEmpty') {
       const player = state.players.find((p) => p.id === conn.peer);
@@ -416,8 +428,7 @@ const HAND_SIZE = 5;
 
   function startGame() {
     const ids = state.players.map((p) => p.id);
-    const hands = dealHands(MASTER_DECK, ids, HAND_SIZE);
-    state.pool = [];
+    const hands = dealHands(MASTER_DECK, ids, state.handSize);
     state.gameStarted = true;
     state.gameOver = false;
     state.winnerName = null;
@@ -429,10 +440,9 @@ const HAND_SIZE = 5;
 
   // Starts the 30-second Complete process for one of this player's own
   // cards. The card stays visible (marked pending) until it actually
-  // resolves — it isn't removed from the hand and doesn't join the
-  // shared pool until then. While a card is pending, this player can't
-  // start Completing another one, but Caught Slipping and every other
-  // player remain unaffected.
+  // resolves — it isn't removed from the hand until then. While a
+  // card is pending, this player can't start Completing another one,
+  // but Caught Slipping and every other player remain unaffected.
   function completeCard(cardId) {
     if (state.pendingCompleteId) return;
     const card = state.hand.find((c) => c.id === cardId);
@@ -451,36 +461,34 @@ const HAND_SIZE = 5;
     render();
   }
 
-  // Swaps a card for a random one drawn from the shared pool of
-  // previously removed cards (falling back to the full master deck if
-  // the pool is empty). Not available on a card that's currently
-  // pending a Complete.
+  // Swaps a card for a new one, drawn uniformly at random from the
+  // full master deck. The deck itself is never consumed by dealing or
+  // by this draw, so any card — including ones sitting in someone
+  // else's hand or already completed — can always come up again for
+  // anyone. Not available on a card that's currently pending a
+  // Complete.
   function slipCard(cardId) {
     const card = state.hand.find((c) => c.id === cardId);
     if (!card || card.pending) return;
-    const oldText = card.text;
     if (state.isHost) {
-      const newText = drawReplacement();
-      addToPool(oldText);
-      card.text = newText;
+      card.text = drawReplacement();
       render();
     } else {
-      state.hostConn.send({ type: 'requestSlip', cardId: cardId, oldCard: oldText });
+      state.hostConn.send({ type: 'requestSlip', cardId: cardId });
     }
   }
 
   // Host-only: runs the 30-second timer for one player's Complete
   // action. The player's name and card text are captured now, in this
   // closure — so even if that player disconnects before the timer
-  // fires, the pool addition and announcement still happen on
-  // schedule. Only the final "your card is cleared" notice back to
-  // that specific player is skipped if they're no longer connected.
+  // fires, the announcement still fires on schedule. Only the final
+  // "your card is cleared" notice back to that specific player is
+  // skipped if they're no longer connected.
   function schedulePendingComplete(playerId, cardId, cardText) {
     const player = state.players.find((p) => p.id === playerId);
     const playerName = player ? player.name : 'A player';
 
     setTimeout(() => {
-      addToPool(cardText);
       const text = playerName + ' has slipped in ' + cardText;
       pushAnnouncement(text);
       broadcastToClients({ type: 'announcement', text });
@@ -526,16 +534,11 @@ const HAND_SIZE = 5;
     setTimeout(() => toast.remove(), 6000);
   }
 
-  // Host-only: the shared, authoritative pool of removed cards.
-  function addToPool(card) {
-    state.pool.push(card);
-  }
-
+  // The deck itself is never consumed — dealing only copies out of it,
+  // never removes from it — so every draw samples uniformly across
+  // the whole deck, and anything already in play or already completed
+  // remains just as likely to come up as anything else.
   function drawReplacement() {
-    if (state.pool.length > 0) {
-      const i = Math.floor(Math.random() * state.pool.length);
-      return state.pool.splice(i, 1)[0];
-    }
     return MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
   }
 

@@ -51,8 +51,10 @@ screens without a separate mobile version.
    guaranteed unique among currently connected players — the host
    assigns names centrally and frees a name back up when its player
    disconnects.
-3. Once 2–4 players have joined, the host clicks **Start Game** — this
-   shuffles `deck.js` and deals 5 cards to each player privately.
+3. Before starting, the host picks how many cards each player gets —
+   **3, 5, or 10** — via a dropdown in the waiting room. Once 2–4
+   players have joined, the host clicks **Start Game** to shuffle
+   `deck.js` and deal that many cards to each player privately.
 4. There is no shared board. Each card in your hand has exactly two
    actions:
    - **Complete** — starts a 30-second countdown on that card. It
@@ -67,12 +69,14 @@ screens without a separate mobile version.
      This timer runs on the host, not on your own device, so it still
      resolves on schedule even if you disconnect right after starting
      it.
-   - **Caught Slipping** — swaps the card for a new one, drawn at
-     random from that same shared pool (falling back to the full
-     master deck if the pool happens to be empty). Your hand size
-     doesn't change, and there's no delay or announcement for this
-     action. Not available on a card that's currently counting down
-     from a Complete.
+   - **Caught Slipping** — swaps the card for a new one, drawn
+     uniformly at random from the full master deck. The deck itself
+     is never consumed by dealing or by this draw, so any card —
+     including ones already sitting in someone else's hand, or ones
+     someone already completed — remains just as likely to come up as
+     anything else. Your hand size doesn't change, and there's no
+     delay or announcement for this action. Not available on a card
+     that's currently counting down from a Complete.
 5. As soon as any player's hand actually reaches zero cards — which,
    for a Complete action, only happens once its 30-second countdown
    has finished, not the moment the button is pressed — that player is
