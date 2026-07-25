@@ -1,7 +1,7 @@
 // Readable source mirroring public/bundle.js (kept in sync manually —
 // see README, "Development workflow").
 import { MASTER_DECK, HAND_SIZE } from './deck.js';
-import { dealHands, shortId } from './utils.js';
+import { dealHands, shortId, generateShortId } from './utils.js';
 import { createPeer, connectToHost } from './peer.js';
 
 export function App(root) {
@@ -24,13 +24,13 @@ export function App(root) {
           <h2>P2P Card Game</h2>
           <button id="createBtn">Create Game (Host)</button>
           <div class="join-row">
-            <input id="hostIdInput" placeholder="Host ID" />
+            <input id="hostIdInput" placeholder="Host ID" maxlength="5" />
             <button id="joinBtn">Join Game</button>
           </div>
         </div>`;
       root.querySelector('#createBtn').onclick = hostGame;
       root.querySelector('#joinBtn').onclick = () => {
-        const id = root.querySelector('#hostIdInput').value.trim();
+        const id = root.querySelector('#hostIdInput').value.trim().toUpperCase();
         if (id) joinGame(id);
       };
       return;
@@ -98,16 +98,34 @@ export function App(root) {
 
   function hostGame() {
     state.isHost = true;
-    state.peer = createPeer(
+    attemptHostId();
+  }
+
+  // Requests a 5-character host ID from the broker. If it's already
+  // taken by another active game, retries with a new random ID.
+  function attemptHostId(attemptsLeft = 5) {
+    const desiredId = generateShortId();
+    const peer = createPeer(
       (id) => {
+        state.peer = peer;
         state.myId = id;
         addPlayer(id);
+        attachHostConnectionHandler(peer);
         render();
       },
-      (err) => alert('Peer error: ' + err.message)
+      (err) => {
+        if (err.type === 'unavailable-id' && attemptsLeft > 0) {
+          attemptHostId(attemptsLeft - 1);
+        } else {
+          alert('Peer error: ' + err.message);
+        }
+      },
+      desiredId
     );
+  }
 
-    state.peer.on('connection', (conn) => {
+  function attachHostConnectionHandler(peer) {
+    peer.on('connection', (conn) => {
       conn.on('open', () => {
         state.conns[conn.peer] = conn;
         addPlayer(conn.peer);
