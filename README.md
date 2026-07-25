@@ -35,10 +35,19 @@ browser, or serve the `docs/` folder with GitHub Pages.
 1. One player clicks **Create Game (Host)** and shares the displayed
    Host ID (via chat, text, whatever) with 1–3 friends.
 2. Each friend opens the page, pastes the Host ID into **Join Game**.
+   Everyone is randomly assigned a display name (binker, bungle,
+   chungle, bingus, binkus, trundle, fundus, chungus, or Ted Cruz) —
+   not guaranteed unique.
 3. Once 2–4 players have joined, the host clicks **Start Game** — this
    shuffles `deck.js` and deals 5 cards to each player privately.
-4. Click a card in your hand to play it to the shared board; everyone
-   sees the move, no one sees anyone else's remaining hand.
+4. Each card in your hand has three actions:
+   - **Play** — moves the card to the shared board, visible to everyone.
+   - **Complete** — removes the card from your hand entirely (it's done).
+   - **Caught Slipping** — swaps the card for a new random one from the
+     master deck, without changing your hand size.
+5. As soon as any player's hand reaches zero cards, the game ends for
+   everyone — a "Game Over" screen with the final board is shown to
+   all connected players.
 
 ## Deployment (GitHub Pages)
 

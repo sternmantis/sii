@@ -33,3 +33,13 @@ export function dealHands(deck, playerIds, handSize) {
   });
   return hands;
 }
+
+// Each player is randomly assigned one of these display names on
+// connect. Not guaranteed unique.
+const NAME_POOL = [
+  'binker', 'bungle', 'chungle', 'bingus', 'binkus',
+  'trundle', 'fundus', 'chungus', 'Ted Cruz'
+];
+export function randomName() {
+  return NAME_POOL[Math.floor(Math.random() * NAME_POOL.length)];
+}

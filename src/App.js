@@ -1,21 +1,28 @@
-// Readable source mirroring public/bundle.js (kept in sync manually —
+// Readable source mirroring docs/bundle.js (kept in sync manually —
 // see README, "Development workflow").
 import { MASTER_DECK, HAND_SIZE } from './deck.js';
-import { dealHands, shortId, generateShortId } from './utils.js';
+import { dealHands, shortId, generateShortId, randomName } from './utils.js';
 import { createPeer, connectToHost } from './peer.js';
 
 export function App(root) {
   const state = {
     peer: null,
     myId: null,
+    myName: null,
     isHost: false,
     hostConn: null,       // client -> host connection
     conns: {},            // host -> map of peerId -> connection
-    players: [],          // ordered list of peerIds (host first)
+    players: [],          // [{ id, name }], host first
     hand: [],
     board: [],
-    gameStarted: false
+    gameStarted: false,
+    gameOver: false
   };
+
+  function nameFor(id) {
+    const p = state.players.find((pl) => pl.id === id);
+    return p ? p.name : shortId(id);
+  }
 
   function render() {
     if (!state.myId) {
@@ -42,8 +49,9 @@ export function App(root) {
           <h2>${state.isHost ? 'Hosting Game' : 'Joined Game'}</h2>
           ${state.isHost ? `<p>Share this Host ID with other players:</p>
           <code class="host-id">${state.myId}</code>` : `<p>Waiting for host to start...</p>`}
+          <p>You are: <strong>${state.myName}</strong></p>
           <h4>Players (${state.players.length})</h4>
-          <ul>${state.players.map(id => `<li>${shortId(id)}${id === state.myId ? ' (you)' : ''}</li>`).join('')}</ul>
+          <ul>${state.players.map(p => `<li>${p.name}${p.id === state.myId ? ' (you)' : ''}</li>`).join('')}</ul>
           ${state.isHost ? `<button id="startBtn" ${state.players.length < 2 ? 'disabled' : ''}>Start Game</button>` : ''}
         </div>`;
       if (state.isHost) {
@@ -52,31 +60,67 @@ export function App(root) {
       return;
     }
 
+    if (state.gameOver) {
+      root.innerHTML = `
+        <div class="lobby">
+          <h2>Game Over</h2>
+          <p>A player ran out of cards — the game has ended for everyone.</p>
+          <h4>Final Board</h4>
+          <div class="board-cards">
+            ${state.board.map(p => `<div class="played-card"><span class="player-tag">${nameFor(p.playerId)}</span>${p.card}</div>`).join('')}
+          </div>
+        </div>`;
+      return;
+    }
+
     root.innerHTML = `
       <div class="game-layout">
         <div class="hand-panel">
           <h3>Your Hand</h3>
-          ${state.hand.map((c, i) => `<div class="card" data-card="${i}">${c}</div>`).join('')}
+          ${state.hand.map((c, i) => `
+            <div class="card">
+              <div class="card-text">${c}</div>
+              <div class="card-actions">
+                <button class="play-btn" data-idx="${i}">Play</button>
+                <button class="complete-btn" data-idx="${i}">Complete</button>
+                <button class="slip-btn" data-idx="${i}">Caught Slipping</button>
+              </div>
+            </div>
+          `).join('')}
         </div>
         <div class="board-panel">
           <h3>Shared Board</h3>
           <div class="board-cards">
-            ${state.board.map(p => `<div class="played-card"><span class="player-tag">${shortId(p.playerId)}</span>${p.card}</div>`).join('')}
+            ${state.board.map(p => `<div class="played-card"><span class="player-tag">${nameFor(p.playerId)}</span>${p.card}</div>`).join('')}
           </div>
         </div>
         <div class="player-list">
           <h4>Players</h4>
-          ${state.players.map(id => `<span class="player-chip">${shortId(id)}${id === state.myId ? ' (you)' : ''}</span>`).join('')}
+          ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
         </div>
       </div>`;
 
-    root.querySelectorAll('.card').forEach((el) => {
+    root.querySelectorAll('.play-btn').forEach((el) => {
       el.addEventListener('click', () => {
-        const idx = Number(el.getAttribute('data-card'));
+        const idx = Number(el.getAttribute('data-idx'));
         const card = state.hand[idx];
         playCard(card);
         state.hand = state.hand.filter((_, i) => i !== idx);
         render();
+      });
+    });
+
+    root.querySelectorAll('.complete-btn').forEach((el) => {
+      el.addEventListener('click', () => {
+        const idx = Number(el.getAttribute('data-idx'));
+        completeCard(idx);
+      });
+    });
+
+    root.querySelectorAll('.slip-btn').forEach((el) => {
+      el.addEventListener('click', () => {
+        const idx = Number(el.getAttribute('data-idx'));
+        slipCard(idx);
       });
     });
   }
@@ -87,17 +131,20 @@ export function App(root) {
     });
   }
 
-  function addPlayer(id) {
-    if (!state.players.includes(id)) state.players.push(id);
+  function addPlayer(player) {
+    if (!state.players.find((p) => p.id === player.id)) {
+      state.players.push(player);
+    }
   }
 
   function removePlayer(id) {
-    state.players = state.players.filter((p) => p !== id);
+    state.players = state.players.filter((p) => p.id !== id);
     delete state.conns[id];
   }
 
   function hostGame() {
     state.isHost = true;
+    state.myName = randomName();
     attemptHostId();
   }
 
@@ -109,7 +156,7 @@ export function App(root) {
       (id) => {
         state.peer = peer;
         state.myId = id;
-        addPlayer(id);
+        addPlayer({ id, name: state.myName });
         attachHostConnectionHandler(peer);
         render();
       },
@@ -128,9 +175,6 @@ export function App(root) {
     peer.on('connection', (conn) => {
       conn.on('open', () => {
         state.conns[conn.peer] = conn;
-        addPlayer(conn.peer);
-        broadcastToClients({ type: 'players', players: state.players });
-        render();
       });
 
       conn.on('data', (msg) => handleHostMessage(conn, msg));
@@ -144,18 +188,26 @@ export function App(root) {
   }
 
   function handleHostMessage(conn, msg) {
-    if (msg.type === 'playCard') {
+    if (msg.type === 'hello') {
+      addPlayer({ id: conn.peer, name: msg.name });
+      broadcastToClients({ type: 'players', players: state.players });
+      render();
+    } else if (msg.type === 'playCard') {
       applyPlay(conn.peer, msg.card);
+    } else if (msg.type === 'handEmpty') {
+      applyGameOver();
     }
   }
 
   function joinGame(hostId) {
     state.isHost = false;
+    state.myName = randomName();
     state.peer = createPeer(
       (id) => {
         state.myId = id;
         connectToHost(state.peer, hostId, (conn) => {
           state.hostConn = conn;
+          conn.send({ type: 'hello', name: state.myName });
           conn.on('data', (msg) => handleClientMessage(msg));
           conn.on('close', () => alert('Disconnected from host.'));
           render();
@@ -173,12 +225,15 @@ export function App(root) {
       state.gameStarted = true;
     } else if (msg.type === 'cardPlayed') {
       state.board.push({ playerId: msg.playerId, card: msg.card });
+    } else if (msg.type === 'gameOver') {
+      state.gameOver = true;
     }
     render();
   }
 
   function startGame() {
-    const hands = dealHands(MASTER_DECK, state.players, HAND_SIZE);
+    const ids = state.players.map((p) => p.id);
+    const hands = dealHands(MASTER_DECK, ids, HAND_SIZE);
     state.gameStarted = true;
     state.hand = hands[state.myId];
     Object.entries(state.conns).forEach(([id, conn]) => {
@@ -200,6 +255,40 @@ export function App(root) {
   function applyPlay(playerId, card) {
     state.board.push({ playerId, card });
     broadcastToClients({ type: 'cardPlayed', playerId, card }, playerId);
+    render();
+  }
+
+  // Removes a card from the local hand entirely.
+  function completeCard(idx) {
+    state.hand.splice(idx, 1);
+    render();
+    checkHandEmpty();
+  }
+
+  // Swaps a card for a new random one from the master deck. This is a
+  // purely local/private action — no one else sees your hand anyway,
+  // so there's no need to coordinate the swap through the host.
+  function slipCard(idx) {
+    const replacement = MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
+    state.hand[idx] = replacement;
+    render();
+  }
+
+  // When a player's hand hits zero, the game ends for everyone.
+  function checkHandEmpty() {
+    if (state.hand.length === 0 && !state.gameOver) {
+      if (state.isHost) {
+        applyGameOver();
+      } else if (state.hostConn) {
+        state.hostConn.send({ type: 'handEmpty' });
+      }
+    }
+  }
+
+  // Host-only: marks the game over locally and tells every client.
+  function applyGameOver() {
+    state.gameOver = true;
+    broadcastToClients({ type: 'gameOver' });
     render();
   }
 

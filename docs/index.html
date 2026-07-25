@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Slip It In</title>
+  <title>P2P Card Game</title>
   <style>
     body { margin: 0; font-family: sans-serif; background: #1e1e2e; color: #eee; }
     .lobby { max-width: 480px; margin: 60px auto; text-align: center; }
@@ -27,9 +27,15 @@
     .board-panel { grid-row: 1 / 2; grid-column: 2 / 3; padding: 12px; overflow-y: auto; }
     .player-list { grid-row: 2 / 3; grid-column: 1 / 3; background: #2a2a3d;
       display: flex; align-items: center; gap: 10px; padding: 0 12px; flex-wrap: wrap; }
-    .card { background: #3d3d5c; border-radius: 6px; padding: 8px; margin: 6px 0;
-      cursor: pointer; transition: transform 0.1s; }
-    .card:hover { transform: scale(1.03); background: #4d4d6c; }
+    .card { background: #3d3d5c; border-radius: 6px; padding: 8px; margin: 6px 0; }
+    .card-text { margin-bottom: 6px; }
+    .card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+    .card-actions button { font-size: 0.7em; padding: 4px 6px; border-radius: 4px;
+      border: none; cursor: pointer; background: #555; color: #eee; }
+    .play-btn { background: #4a7a4a !important; }
+    .complete-btn { background: #4a5a7a !important; }
+    .slip-btn { background: #7a4a4a !important; }
+    .card-actions button:hover { filter: brightness(1.2); }
     .board-cards { display: flex; flex-wrap: wrap; gap: 8px; }
     .played-card { background: #333; border-radius: 6px; padding: 8px 12px; }
     .player-tag { font-size: 0.75em; color: #9c9cff; margin-right: 6px; }
