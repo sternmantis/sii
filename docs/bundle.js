@@ -2,8 +2,13 @@
 // the file GitHub Pages actually serves. If you edit src/, mirror the
 // change here (see README "Development workflow").
 (function () {
+// Master card list — bundled into the client since there is no server.
+// Note: any player can technically inspect this in devtools; true hidden
+// information is not achievable without a trusted server. This keeps the
+// deck out of the *rendered UI* only — each player still just sees their
+// own dealt hand and the shared board.
   const MASTER_DECK = [
-"pocket jerky", "man glitter", "gravy tuxedo", "emotional lasagna",
+  "pocket jerky", "man glitter", "gravy tuxedo", "emotional lasagna",
   "backup mustache", "car jerky", "beef curtains", "moon jerky",
   "wizard chili", "goblin taxes", "raccoon dues", "thunder cape",
   "casserole diplomacy", "jerky negotiations", "mall wizardry", "elevator karaoke",
@@ -78,8 +83,9 @@
   "layaway redemption arc", "self-checkout confession", "curbside epiphany", "drive-thru wisdom",
   "fast-track forgiveness", "backorder destiny", "overstock nostalgia", "clearance-bin bravery",
   "bulk-size humility", "trial-size confidence", "free-sample loyalty", "warranty-void honesty"
-  ];
-  const HAND_SIZE = 5;
+];
+
+const HAND_SIZE = 5;
 
   function shuffle(arr) {
     const copy = [...arr];
@@ -119,11 +125,32 @@
   }
 
   const root = document.getElementById('app');
+
+  let cardIdCounter = 0;
+  function generateCardId() {
+    cardIdCounter += 1;
+    return 'c' + cardIdCounter + '-' + Math.random().toString(36).slice(2, 6);
+  }
+
   const state = {
     peer: null, myId: null, myName: null, isHost: false, hostConn: null,
-    conns: {}, players: [], hand: [], pool: [], gameStarted: false, gameOver: false,
-    winnerName: null, autoJoining: false, pendingHostId: null, joinError: null
+    conns: {}, players: [], hand: [], pendingCompleteId: null, pool: [],
+    gameStarted: false, gameOver: false, winnerName: null,
+    autoJoining: false, pendingHostId: null, joinError: null
   };
+
+  let pendingTickInterval = null;
+  function startPendingTicker() {
+    if (pendingTickInterval) return;
+    pendingTickInterval = setInterval(() => {
+      if (!state.pendingCompleteId) {
+        clearInterval(pendingTickInterval);
+        pendingTickInterval = null;
+        return;
+      }
+      render();
+    }, 1000);
+  }
 
   function render() {
     if (!state.myId) {
@@ -186,7 +213,13 @@
         <div class="lobby">
           <h2>Game Over</h2>
           <p><strong>${state.winnerName || 'A player'}</strong> ran out of cards and wins!</p>
+          ${state.isHost
+            ? `<button id="newGameBtn">Start New Game</button>`
+            : `<p>Waiting for the host to start a new game...</p>`}
         </div>`;
+      if (state.isHost) {
+        root.querySelector('#newGameBtn').onclick = startGame;
+      }
       return;
     }
 
@@ -194,15 +227,25 @@
       <div class="game-layout">
         <div class="hand-panel">
           <h3>Your Hand</h3>
-          ${state.hand.map((c, i) => `
-            <div class="card">
-              <div class="card-text">${c}</div>
-              <div class="card-actions">
-                <button class="complete-btn" data-idx="${i}">Complete</button>
-                <button class="slip-btn" data-idx="${i}">Caught Slipping</button>
-              </div>
-            </div>
-          `).join('')}
+          ${state.hand.map((c) => {
+            if (c.pending) {
+              const secondsLeft = Math.max(0, Math.ceil((c.pendingUntil - Date.now()) / 1000));
+              return `
+                <div class="card card-pending">
+                  <div class="card-text">${c.text}</div>
+                  <div class="pending-label">Clearing in ${secondsLeft}s...</div>
+                </div>`;
+            }
+            const completeDisabled = !!state.pendingCompleteId;
+            return `
+              <div class="card">
+                <div class="card-text">${c.text}</div>
+                <div class="card-actions">
+                  <button class="complete-btn" data-id="${c.id}" ${completeDisabled ? 'disabled' : ''}>Complete</button>
+                  <button class="slip-btn" data-id="${c.id}">Caught Slipping</button>
+                </div>
+              </div>`;
+          }).join('')}
         </div>
         <div class="player-list">
           ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
@@ -211,15 +254,13 @@
 
     root.querySelectorAll('.complete-btn').forEach((el) => {
       el.addEventListener('click', () => {
-        const idx = Number(el.getAttribute('data-idx'));
-        completeCard(idx);
+        completeCard(el.getAttribute('data-id'));
       });
     });
 
     root.querySelectorAll('.slip-btn').forEach((el) => {
       el.addEventListener('click', () => {
-        const idx = Number(el.getAttribute('data-idx'));
-        slipCard(idx);
+        slipCard(el.getAttribute('data-id'));
       });
     });
   }
@@ -300,15 +341,12 @@
       addPlayer({ id: conn.peer, name });
       broadcastToClients({ type: 'players', players: state.players });
       render();
-    } else if (msg.type === 'cardRemoved') {
-      addToPool(msg.card);
-      const player = state.players.find((p) => p.id === conn.peer);
-      const playerName = player ? player.name : 'A player';
-      scheduleAnnouncement(playerName, msg.card);
+    } else if (msg.type === 'completeStarted') {
+      schedulePendingComplete(conn.peer, msg.cardId, msg.card);
     } else if (msg.type === 'requestSlip') {
       const newCard = drawReplacement();
       addToPool(msg.oldCard);
-      conn.send({ type: 'slipResult', idx: msg.idx, newCard });
+      conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
     } else if (msg.type === 'handEmpty') {
       const player = state.players.find((p) => p.id === conn.peer);
       const winnerName = player ? player.name : 'A player';
@@ -357,10 +395,16 @@
       const me = state.players.find((p) => p.id === state.myId);
       if (me) state.myName = me.name;
     } else if (msg.type === 'yourHand') {
-      state.hand = msg.hand;
+      state.hand = msg.hand.map((text) => ({ id: generateCardId(), text, pending: false, pendingUntil: null }));
+      state.pendingCompleteId = null;
       state.gameStarted = true;
+      state.gameOver = false;
+      state.winnerName = null;
     } else if (msg.type === 'slipResult') {
-      state.hand[msg.idx] = msg.newCard;
+      const card = state.hand.find((c) => c.id === msg.cardId);
+      if (card) card.text = msg.newCard;
+    } else if (msg.type === 'completeResolved') {
+      resolveOwnPendingComplete(msg.cardId);
     } else if (msg.type === 'gameOver') {
       state.gameOver = true;
       state.winnerName = msg.winnerName;
@@ -375,52 +419,94 @@
     const hands = dealHands(MASTER_DECK, ids, HAND_SIZE);
     state.pool = [];
     state.gameStarted = true;
-    state.hand = hands[state.myId];
+    state.gameOver = false;
+    state.winnerName = null;
+    state.pendingCompleteId = null;
+    state.hand = hands[state.myId].map((text) => ({ id: generateCardId(), text, pending: false, pendingUntil: null }));
     Object.entries(state.conns).forEach(([id, conn]) => conn.send({ type: 'yourHand', hand: hands[id] }));
     render();
   }
 
-  // Removes a card from the local hand entirely. It joins the shared
-  // pool of removed cards (so it can be drawn again later by anyone),
-  // and starts a 30-second delayed announcement to everyone.
-  function completeCard(idx) {
-    const removed = state.hand.splice(idx, 1)[0];
+  // Starts the 30-second Complete process for one of this player's own
+  // cards. The card stays visible (marked pending) until it actually
+  // resolves — it isn't removed from the hand and doesn't join the
+  // shared pool until then. While a card is pending, this player can't
+  // start Completing another one, but Caught Slipping and every other
+  // player remain unaffected.
+  function completeCard(cardId) {
+    if (state.pendingCompleteId) return;
+    const card = state.hand.find((c) => c.id === cardId);
+    if (!card || card.pending) return;
+
+    card.pending = true;
+    card.pendingUntil = Date.now() + 30000;
+    state.pendingCompleteId = cardId;
+    startPendingTicker();
+
     if (state.isHost) {
-      addToPool(removed);
-      scheduleAnnouncement(state.myName, removed);
+      schedulePendingComplete(state.myId, cardId, card.text);
     } else {
-      state.hostConn.send({ type: 'cardRemoved', card: removed });
+      state.hostConn.send({ type: 'completeStarted', cardId: cardId, card: card.text });
     }
     render();
-    checkHandEmpty();
   }
 
   // Swaps a card for a random one drawn from the shared pool of
   // previously removed cards (falling back to the full master deck if
-  // the pool is empty). The old card then joins the pool itself, so
-  // it too can be drawn again later by anyone.
-  function slipCard(idx) {
-    const oldCard = state.hand[idx];
+  // the pool is empty). Not available on a card that's currently
+  // pending a Complete.
+  function slipCard(cardId) {
+    const card = state.hand.find((c) => c.id === cardId);
+    if (!card || card.pending) return;
+    const oldText = card.text;
     if (state.isHost) {
-      const newCard = drawReplacement();
-      addToPool(oldCard);
-      state.hand[idx] = newCard;
+      const newText = drawReplacement();
+      addToPool(oldText);
+      card.text = newText;
       render();
     } else {
-      state.hostConn.send({ type: 'requestSlip', idx, oldCard });
+      state.hostConn.send({ type: 'requestSlip', cardId: cardId, oldCard: oldText });
     }
   }
 
-  // Host-only: starts a 30-second timer for a completed card. The
-  // player's name and card text are captured now, in this closure —
-  // so even if that player disconnects before the timer fires, the
-  // announcement still goes out on schedule.
-  function scheduleAnnouncement(playerName, card) {
+  // Host-only: runs the 30-second timer for one player's Complete
+  // action. The player's name and card text are captured now, in this
+  // closure — so even if that player disconnects before the timer
+  // fires, the pool addition and announcement still happen on
+  // schedule. Only the final "your card is cleared" notice back to
+  // that specific player is skipped if they're no longer connected.
+  function schedulePendingComplete(playerId, cardId, cardText) {
+    const player = state.players.find((p) => p.id === playerId);
+    const playerName = player ? player.name : 'A player';
+
     setTimeout(() => {
-      const text = playerName + ' has slipped in ' + card;
+      addToPool(cardText);
+      const text = playerName + ' has slipped in ' + cardText;
       pushAnnouncement(text);
       broadcastToClients({ type: 'announcement', text });
+
+      if (playerId === state.myId) {
+        resolveOwnPendingComplete(cardId);
+      } else if (state.conns[playerId]) {
+        state.conns[playerId].send({ type: 'completeResolved', cardId: cardId });
+      }
     }, 30000);
+  }
+
+  // Called on the completing player's own client once their card's
+  // 30-second timer has actually elapsed: only now does it leave the
+  // hand, and only now is the hand checked for the win condition.
+  function resolveOwnPendingComplete(cardId) {
+    state.hand = state.hand.filter((c) => c.id !== cardId);
+    if (state.pendingCompleteId === cardId) {
+      state.pendingCompleteId = null;
+      if (pendingTickInterval) {
+        clearInterval(pendingTickInterval);
+        pendingTickInterval = null;
+      }
+    }
+    render();
+    checkHandEmpty();
   }
 
   // Shows a transient toast notification via a DOM overlay outside of
@@ -453,7 +539,9 @@
     return MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
   }
 
-  // When a player's hand hits zero, the game ends for everyone.
+  // When a player's hand hits zero — which, for a Complete action,
+  // only happens once its 30-second timer has actually resolved — the
+  // game ends for everyone, naming that player as the winner.
   function checkHandEmpty() {
     if (state.hand.length === 0 && !state.gameOver) {
       if (state.isHost) applyGameOver(state.myName);

@@ -55,25 +55,37 @@ screens without a separate mobile version.
    shuffles `deck.js` and deals 5 cards to each player privately.
 4. There is no shared board. Each card in your hand has exactly two
    actions:
-   - **Complete** — removes the card from your hand immediately. It
-     joins a shared pool of removed cards that anyone can later draw
-     again via Caught Slipping. Additionally, a 30-second timer starts
-     on the host; when it runs out, every player is notified with a
-     toast: "**[Player] has slipped in [card text]**" — revealing what
-     was completed, a bit after the fact. This timer runs on the host,
-     not on your own device, so the announcement still fires on
-     schedule even if you disconnect right after completing the card.
+   - **Complete** — starts a 30-second countdown on that card. It
+     stays in your hand (visibly marked, no longer clickable) for the
+     full 30 seconds — it does **not** disappear or join the shared
+     pool right away. While you have a card counting down, you can't
+     start Completing another one, but Caught Slipping still works
+     normally on your other cards, and every other player is
+     completely unaffected. Once the 30 seconds actually elapse, the
+     card leaves your hand, joins the shared pool, and every player is
+     notified with a toast: "**[Player] has slipped in [card text]**".
+     This timer runs on the host, not on your own device, so it still
+     resolves on schedule even if you disconnect right after starting
+     it.
    - **Caught Slipping** — swaps the card for a new one, drawn at
      random from that same shared pool (falling back to the full
      master deck if the pool happens to be empty). Your hand size
-     doesn't change, and there's no delayed announcement for this
-     action.
-5. As soon as any player's hand reaches zero cards, that player is
-   declared the winner and the game ends for everyone — a "Game Over"
+     doesn't change, and there's no delay or announcement for this
+     action. Not available on a card that's currently counting down
+     from a Complete.
+5. As soon as any player's hand actually reaches zero cards — which,
+   for a Complete action, only happens once its 30-second countdown
+   has finished, not the moment the button is pressed — that player is
+   declared the winner and the game ends for everyone. A "Game Over"
    screen names them specifically (e.g. "**binker** ran out of cards
-   and wins!") for all connected players. Any Complete announcements
-   already scheduled before that point will still fire on their
-   original 30-second timer, even after game over.
+   and wins!"). Any Complete countdowns already running elsewhere at
+   that point still finish on their original schedule, even after game
+   over.
+6. From the Game Over screen, the host can click **Start New Game** to
+   deal a fresh hand to the same connected players and jump straight
+   back into play — no need to reconnect or share the Host ID again.
+   Everyone else sees "Waiting for the host to start a new game..."
+   until that happens.
 
 ### Host refresh/close warning
 If the host refreshes, closes the tab, or navigates away, every other
