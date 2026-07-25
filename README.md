@@ -1,4 +1,4 @@
-# P2P Card Game (No Backend)
+# Slip It In (No Backend)
 
 A 3–4 player card game that runs **entirely as static files on GitHub
 Pages** — there is no server to deploy or run. Players connect directly
@@ -36,8 +36,15 @@ browser, or serve the `docs/` folder with GitHub Pages. The page is
 mobile-responsive — it scales to fit phone, tablet, and desktop
 screens without a separate mobile version.
 
-1. One player clicks **Create Game (Host)** and shares the displayed
-   5-character Host ID (via chat, text, whatever) with 1–3 friends.
+1. One player clicks **Create Game (Host)** and shares either:
+   - the displayed 5-character **Host ID**, which friends type into
+     the **Join Game** field, or
+   - the **Copy Invite Link** button next to it, which copies a URL
+     like `https://<your-pages-url>/?host=ABCDE`. Anyone who opens
+     that link joins automatically — no typing required. If the link
+     ever fails to connect (e.g. the game already ended), the page
+     falls back to the normal screen so they can still enter the Host
+     ID manually.
 2. Each friend opens the page, pastes the Host ID into **Join Game**.
    Everyone is randomly assigned a display name (binker, bungle,
    chungle, bingus, binkus, trundle, fundus, chungus, or Ted Cruz),
@@ -61,10 +68,12 @@ screens without a separate mobile version.
      master deck if the pool happens to be empty). Your hand size
      doesn't change, and there's no delayed announcement for this
      action.
-5. As soon as any player's hand reaches zero cards, the game ends for
-   everyone — a "Game Over" screen is shown to all connected players.
-   Any Complete announcements already scheduled before that point will
-   still fire on their original 30-second timer, even after game over.
+5. As soon as any player's hand reaches zero cards, that player is
+   declared the winner and the game ends for everyone — a "Game Over"
+   screen names them specifically (e.g. "**binker** ran out of cards
+   and wins!") for all connected players. Any Complete announcements
+   already scheduled before that point will still fire on their
+   original 30-second timer, even after game over.
 
 ### Host refresh/close warning
 If the host refreshes, closes the tab, or navigates away, every other

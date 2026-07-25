@@ -121,14 +121,24 @@
   const root = document.getElementById('app');
   const state = {
     peer: null, myId: null, myName: null, isHost: false, hostConn: null,
-    conns: {}, players: [], hand: [], pool: [], gameStarted: false, gameOver: false
+    conns: {}, players: [], hand: [], pool: [], gameStarted: false, gameOver: false,
+    winnerName: null, autoJoining: false, pendingHostId: null, joinError: null
   };
 
   function render() {
     if (!state.myId) {
+      if (state.autoJoining) {
+        root.innerHTML = `
+          <div class="lobby">
+            <h2>Joining Game...</h2>
+            <p>Connecting to host <strong>${state.pendingHostId}</strong></p>
+          </div>`;
+        return;
+      }
       root.innerHTML = `
         <div class="lobby">
-          <h2>P2P Card Game</h2>
+          <h2>Slip It In</h2>
+          ${state.joinError ? `<p class="error-text">${state.joinError}</p>` : ''}
           <button id="createBtn">Create Game (Host)</button>
           <div class="join-row">
             <input id="hostIdInput" placeholder="Host ID" maxlength="5" />
@@ -148,13 +158,26 @@
         <div class="lobby">
           <h2>${state.isHost ? 'Hosting Game' : 'Joined Game'}</h2>
           ${state.isHost ? `<p>Share this Host ID with other players:</p>
-          <code class="host-id">${state.myId}</code>` : `<p>Waiting for host to start...</p>`}
+          <code class="host-id">${state.myId}</code>
+          <div><button id="copyLinkBtn">Copy Invite Link</button></div>` : `<p>Waiting for host to start...</p>`}
           <p>You are: <strong>${state.myName || 'assigning your name...'}</strong></p>
           <h4>Players (${state.players.length})</h4>
           <ul>${state.players.map(p => `<li>${p.name}${p.id === state.myId ? ' (you)' : ''}</li>`).join('')}</ul>
           ${state.isHost ? `<button id="startBtn" ${state.players.length < 2 ? 'disabled' : ''}>Start Game</button>` : ''}
         </div>`;
-      if (state.isHost) root.querySelector('#startBtn').onclick = startGame;
+      if (state.isHost) {
+        root.querySelector('#startBtn').onclick = startGame;
+        const copyBtn = root.querySelector('#copyLinkBtn');
+        copyBtn.onclick = () => {
+          const link = window.location.origin + window.location.pathname + '?host=' + state.myId;
+          navigator.clipboard.writeText(link).then(() => {
+            copyBtn.textContent = 'Copied!';
+            setTimeout(() => { copyBtn.textContent = 'Copy Invite Link'; }, 2000);
+          }).catch(() => {
+            alert('Could not copy automatically. Invite link:\n' + link);
+          });
+        };
+      }
       return;
     }
 
@@ -162,7 +185,7 @@
       root.innerHTML = `
         <div class="lobby">
           <h2>Game Over</h2>
-          <p>A player ran out of cards — the game has ended for everyone.</p>
+          <p><strong>${state.winnerName || 'A player'}</strong> ran out of cards and wins!</p>
         </div>`;
       return;
     }
@@ -287,12 +310,17 @@
       addToPool(msg.oldCard);
       conn.send({ type: 'slipResult', idx: msg.idx, newCard });
     } else if (msg.type === 'handEmpty') {
-      applyGameOver();
+      const player = state.players.find((p) => p.id === conn.peer);
+      const winnerName = player ? player.name : 'A player';
+      applyGameOver(winnerName);
     }
   }
 
-  function joinGame(hostId) {
+  function joinGame(hostId, opts) {
+    if (!opts) opts = {};
     state.isHost = false;
+    state.pendingHostId = hostId;
+    if (opts.auto) state.autoJoining = true;
     state.peer = new Peer();
     state.peer.on('open', (id) => {
       state.myId = id;
@@ -305,7 +333,22 @@
       conn.on('data', (msg) => handleClientMessage(msg));
       conn.on('close', () => alert('Disconnected from host.'));
     });
-    state.peer.on('error', (err) => alert('Peer error: ' + err.message));
+    state.peer.on('error', (err) => {
+      state.autoJoining = false;
+      state.joinError = 'Could not connect to "' + hostId + '" (' + err.message + '). You can try entering the Host ID manually below.';
+      render();
+    });
+  }
+
+  // Auto-joins if the page was opened via a shared invite link
+  // (?host=XXXXX). Falls back to the normal manual-entry lobby if the
+  // link is missing, malformed, or the connection fails.
+  function initFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const hostParam = params.get('host');
+    if (hostParam) {
+      joinGame(hostParam.trim().toUpperCase(), { auto: true });
+    }
   }
 
   function handleClientMessage(msg) {
@@ -320,6 +363,7 @@
       state.hand[msg.idx] = msg.newCard;
     } else if (msg.type === 'gameOver') {
       state.gameOver = true;
+      state.winnerName = msg.winnerName;
     } else if (msg.type === 'announcement') {
       pushAnnouncement(msg.text);
     }
@@ -412,16 +456,18 @@
   // When a player's hand hits zero, the game ends for everyone.
   function checkHandEmpty() {
     if (state.hand.length === 0 && !state.gameOver) {
-      if (state.isHost) applyGameOver();
+      if (state.isHost) applyGameOver(state.myName);
       else if (state.hostConn) state.hostConn.send({ type: 'handEmpty' });
     }
   }
 
-  function applyGameOver() {
+  function applyGameOver(winnerName) {
     state.gameOver = true;
-    broadcastToClients({ type: 'gameOver' });
+    state.winnerName = winnerName;
+    broadcastToClients({ type: 'gameOver', winnerName });
     render();
   }
 
+  initFromUrl();
   render();
 })();
