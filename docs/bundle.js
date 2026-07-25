@@ -33,6 +33,14 @@
     return copy;
   }
   function shortId(id) { return id ? id.slice(0, 5) : 'unknown'; }
+  const ID_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  function generateShortId() {
+    let id = '';
+    for (let i = 0; i < 5; i++) {
+      id += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
+    }
+    return id;
+  }
   function dealHands(deck, playerIds, handSize) {
     const shuffled = shuffle(deck);
     const hands = {};
@@ -57,13 +65,13 @@
           <h2>P2P Card Game</h2>
           <button id="createBtn">Create Game (Host)</button>
           <div class="join-row">
-            <input id="hostIdInput" placeholder="Host ID" />
+            <input id="hostIdInput" placeholder="Host ID" maxlength="5" />
             <button id="joinBtn">Join Game</button>
           </div>
         </div>`;
       root.querySelector('#createBtn').onclick = hostGame;
       root.querySelector('#joinBtn').onclick = () => {
-        const id = root.querySelector('#hostIdInput').value.trim();
+        const id = root.querySelector('#hostIdInput').value.trim().toUpperCase();
         if (id) joinGame(id);
       };
       return;
@@ -125,14 +133,34 @@
 
   function hostGame() {
     state.isHost = true;
-    state.peer = new Peer(); // PeerJS free public broker (signaling only)
-    state.peer.on('open', (id) => {
+    attemptHostId();
+  }
+
+  // Requests a 5-character host ID from the broker (free public
+  // PeerJS signaling service). If it's already taken by another
+  // active game, retries with a new random ID.
+  function attemptHostId(attemptsLeft) {
+    if (attemptsLeft === undefined) attemptsLeft = 5;
+    const desiredId = generateShortId();
+    const peer = new Peer(desiredId);
+    peer.on('open', (id) => {
+      state.peer = peer;
       state.myId = id;
       addPlayer(id);
+      attachHostConnectionHandler(peer);
       render();
     });
-    state.peer.on('error', (err) => alert('Peer error: ' + err.message));
-    state.peer.on('connection', (conn) => {
+    peer.on('error', (err) => {
+      if (err.type === 'unavailable-id' && attemptsLeft > 0) {
+        attemptHostId(attemptsLeft - 1);
+      } else {
+        alert('Peer error: ' + err.message);
+      }
+    });
+  }
+
+  function attachHostConnectionHandler(peer) {
+    peer.on('connection', (conn) => {
       conn.on('open', () => {
         state.conns[conn.peer] = conn;
         addPlayer(conn.peer);
