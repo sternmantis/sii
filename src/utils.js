@@ -11,6 +11,18 @@ export function shortId(id) {
   return id ? id.slice(0, 5) : 'unknown';
 }
 
+// Generates a 5-character host ID. Excludes visually ambiguous
+// characters (0/O, 1/I/L) so players can read and type it out loud
+// or over text without mistakes.
+const ID_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export function generateShortId() {
+  let id = '';
+  for (let i = 0; i < 5; i++) {
+    id += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
+  }
+  return id;
+}
+
 export function dealHands(deck, playerIds, handSize) {
   const shuffled = shuffle(deck);
   const hands = {};
