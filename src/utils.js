@@ -35,11 +35,19 @@ export function dealHands(deck, playerIds, handSize) {
 }
 
 // Each player is randomly assigned one of these display names on
-// connect. Not guaranteed unique.
-const NAME_POOL = [
+// connect. Names must be unique among currently connected players.
+export const NAME_POOL = [
   'binker', 'bungle', 'chungle', 'bingus', 'binkus',
   'trundle', 'fundus', 'chungus', 'Ted Cruz'
 ];
-export function randomName() {
-  return NAME_POOL[Math.floor(Math.random() * NAME_POOL.length)];
+
+// Picks a random name not currently in use by anyone in `existingNames`.
+// Falls back to the full pool (allowing a repeat) only if every name
+// is already taken — which can't happen at the game's 3–4 player cap
+// against a 9-name pool, but keeps this safe if that ever changes.
+export function pickUniqueName(existingNames) {
+  const taken = new Set(existingNames);
+  const available = NAME_POOL.filter((n) => !taken.has(n));
+  const pool = available.length > 0 ? available : NAME_POOL;
+  return pool[Math.floor(Math.random() * pool.length)];
 }

@@ -1,7 +1,7 @@
 // Readable source mirroring docs/bundle.js (kept in sync manually —
 // see README, "Development workflow").
 import { MASTER_DECK, HAND_SIZE } from './deck.js';
-import { dealHands, generateShortId, randomName } from './utils.js';
+import { dealHands, generateShortId, pickUniqueName } from './utils.js';
 import { createPeer, connectToHost } from './peer.js';
 
 export function App(root) {
@@ -46,7 +46,7 @@ export function App(root) {
           <h2>${state.isHost ? 'Hosting Game' : 'Joined Game'}</h2>
           ${state.isHost ? `<p>Share this Host ID with other players:</p>
           <code class="host-id">${state.myId}</code>` : `<p>Waiting for host to start...</p>`}
-          <p>You are: <strong>${state.myName}</strong></p>
+          <p>You are: <strong>${state.myName || 'assigning your name...'}</strong></p>
           <h4>Players (${state.players.length})</h4>
           <ul>${state.players.map(p => `<li>${p.name}${p.id === state.myId ? ' (you)' : ''}</li>`).join('')}</ul>
           ${state.isHost ? `<button id="startBtn" ${state.players.length < 2 ? 'disabled' : ''}>Start Game</button>` : ''}
@@ -119,7 +119,7 @@ export function App(root) {
 
   function hostGame() {
     state.isHost = true;
-    state.myName = randomName();
+    state.myName = pickUniqueName([]);
     warnBeforeUnload();
     attemptHostId();
   }
@@ -176,11 +176,15 @@ export function App(root) {
 
   function handleHostMessage(conn, msg) {
     if (msg.type === 'hello') {
-      addPlayer({ id: conn.peer, name: msg.name });
+      const name = pickUniqueName(state.players.map((p) => p.name));
+      addPlayer({ id: conn.peer, name });
       broadcastToClients({ type: 'players', players: state.players });
       render();
     } else if (msg.type === 'cardRemoved') {
       addToPool(msg.card);
+      const player = state.players.find((p) => p.id === conn.peer);
+      const playerName = player ? player.name : 'A player';
+      scheduleAnnouncement(playerName, msg.card);
     } else if (msg.type === 'requestSlip') {
       const newCard = drawReplacement();
       addToPool(msg.oldCard);
@@ -192,13 +196,12 @@ export function App(root) {
 
   function joinGame(hostId) {
     state.isHost = false;
-    state.myName = randomName();
     state.peer = createPeer(
       (id) => {
         state.myId = id;
         connectToHost(state.peer, hostId, (conn) => {
           state.hostConn = conn;
-          conn.send({ type: 'hello', name: state.myName });
+          conn.send({ type: 'hello' });
           conn.on('data', (msg) => handleClientMessage(msg));
           conn.on('close', () => alert('Disconnected from host.'));
           render();
@@ -211,6 +214,8 @@ export function App(root) {
   function handleClientMessage(msg) {
     if (msg.type === 'players') {
       state.players = msg.players;
+      const me = state.players.find((p) => p.id === state.myId);
+      if (me) state.myName = me.name;
     } else if (msg.type === 'yourHand') {
       state.hand = msg.hand;
       state.gameStarted = true;
@@ -218,6 +223,8 @@ export function App(root) {
       state.hand[msg.idx] = msg.newCard;
     } else if (msg.type === 'gameOver') {
       state.gameOver = true;
+    } else if (msg.type === 'announcement') {
+      pushAnnouncement(msg.text);
     }
     render();
   }
@@ -235,11 +242,13 @@ export function App(root) {
   }
 
   // Removes a card from the local hand entirely. It joins the shared
-  // pool of removed cards, so it can be drawn again later by anyone.
+  // pool of removed cards (so it can be drawn again later by anyone),
+  // and starts a 30-second delayed announcement to everyone.
   function completeCard(idx) {
     const removed = state.hand.splice(idx, 1)[0];
     if (state.isHost) {
       addToPool(removed);
+      scheduleAnnouncement(state.myName, removed);
     } else {
       state.hostConn.send({ type: 'cardRemoved', card: removed });
     }
@@ -261,6 +270,37 @@ export function App(root) {
     } else {
       state.hostConn.send({ type: 'requestSlip', idx, oldCard });
     }
+  }
+
+  // Host-only: starts a 30-second timer for a completed card. The
+  // player's name and the card text are captured right now, in this
+  // closure — so even if that player disconnects before the timer
+  // fires, the announcement still goes out on schedule using the
+  // data captured here, not a live lookup at fire-time.
+  function scheduleAnnouncement(playerName, card) {
+    setTimeout(() => {
+      const text = `${playerName} has slipped in ${card}`;
+      pushAnnouncement(text);
+      broadcastToClients({ type: 'announcement', text });
+    }, 30000);
+  }
+
+  // Shows a transient toast notification. Implemented as a DOM overlay
+  // outside of #app so it survives the full-replace re-renders that
+  // the rest of the UI does, and doesn't need to be threaded through
+  // every render() branch.
+  function pushAnnouncement(text) {
+    let container = document.getElementById('announcements');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'announcements';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'announcement-toast';
+    toast.textContent = text;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
   }
 
   // Host-only: the shared, authoritative pool of removed cards.

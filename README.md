@@ -40,21 +40,31 @@ screens without a separate mobile version.
    5-character Host ID (via chat, text, whatever) with 1–3 friends.
 2. Each friend opens the page, pastes the Host ID into **Join Game**.
    Everyone is randomly assigned a display name (binker, bungle,
-   chungle, bingus, binkus, trundle, fundus, chungus, or Ted Cruz) —
-   not guaranteed unique.
+   chungle, bingus, binkus, trundle, fundus, chungus, or Ted Cruz),
+   guaranteed unique among currently connected players — the host
+   assigns names centrally and frees a name back up when its player
+   disconnects.
 3. Once 2–4 players have joined, the host clicks **Start Game** — this
    shuffles `deck.js` and deals 5 cards to each player privately.
 4. There is no shared board. Each card in your hand has exactly two
    actions:
-   - **Complete** — removes the card from your hand. It joins a shared
-     pool of removed cards that anyone can later draw again via
-     Caught Slipping.
+   - **Complete** — removes the card from your hand immediately. It
+     joins a shared pool of removed cards that anyone can later draw
+     again via Caught Slipping. Additionally, a 30-second timer starts
+     on the host; when it runs out, every player is notified with a
+     toast: "**[Player] has slipped in [card text]**" — revealing what
+     was completed, a bit after the fact. This timer runs on the host,
+     not on your own device, so the announcement still fires on
+     schedule even if you disconnect right after completing the card.
    - **Caught Slipping** — swaps the card for a new one, drawn at
      random from that same shared pool (falling back to the full
      master deck if the pool happens to be empty). Your hand size
-     doesn't change.
+     doesn't change, and there's no delayed announcement for this
+     action.
 5. As soon as any player's hand reaches zero cards, the game ends for
    everyone — a "Game Over" screen is shown to all connected players.
+   Any Complete announcements already scheduled before that point will
+   still fire on their original 30-second timer, even after game over.
 
 ### Host refresh/close warning
 If the host refreshes, closes the tab, or navigates away, every other
