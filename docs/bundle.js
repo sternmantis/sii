@@ -32,7 +32,6 @@
     }
     return copy;
   }
-  function shortId(id) { return id ? id.slice(0, 5) : 'unknown'; }
   const ID_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   function generateShortId() {
     let id = '';
@@ -62,13 +61,8 @@
   const root = document.getElementById('app');
   const state = {
     peer: null, myId: null, myName: null, isHost: false, hostConn: null,
-    conns: {}, players: [], hand: [], board: [], gameStarted: false, gameOver: false
+    conns: {}, players: [], hand: [], pool: [], gameStarted: false, gameOver: false
   };
-
-  function nameFor(id) {
-    const p = state.players.find((pl) => pl.id === id);
-    return p ? p.name : shortId(id);
-  }
 
   function render() {
     if (!state.myId) {
@@ -109,10 +103,6 @@
         <div class="lobby">
           <h2>Game Over</h2>
           <p>A player ran out of cards — the game has ended for everyone.</p>
-          <h4>Final Board</h4>
-          <div class="board-cards">
-            ${state.board.map(p => `<div class="played-card"><span class="player-tag">${nameFor(p.playerId)}</span>${p.card}</div>`).join('')}
-          </div>
         </div>`;
       return;
     }
@@ -125,34 +115,16 @@
             <div class="card">
               <div class="card-text">${c}</div>
               <div class="card-actions">
-                <button class="play-btn" data-idx="${i}">Play</button>
                 <button class="complete-btn" data-idx="${i}">Complete</button>
                 <button class="slip-btn" data-idx="${i}">Caught Slipping</button>
               </div>
             </div>
           `).join('')}
         </div>
-        <div class="board-panel">
-          <h3>Shared Board</h3>
-          <div class="board-cards">
-            ${state.board.map(p => `<div class="played-card"><span class="player-tag">${nameFor(p.playerId)}</span>${p.card}</div>`).join('')}
-          </div>
-        </div>
         <div class="player-list">
-          <h4>Players</h4>
           ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
         </div>
       </div>`;
-
-    root.querySelectorAll('.play-btn').forEach((el) => {
-      el.addEventListener('click', () => {
-        const idx = Number(el.getAttribute('data-idx'));
-        const card = state.hand[idx];
-        playCard(card);
-        state.hand = state.hand.filter((_, i) => i !== idx);
-        render();
-      });
-    });
 
     root.querySelectorAll('.complete-btn').forEach((el) => {
       el.addEventListener('click', () => {
@@ -187,7 +159,19 @@
   function hostGame() {
     state.isHost = true;
     state.myName = randomName();
+    warnBeforeUnload();
     attemptHostId();
+  }
+
+  // Warns the host before they navigate away, refresh, or close the
+  // tab, since doing so drops every connected player. Browsers no
+  // longer allow a custom message in this dialog, but they still show
+  // their own built-in confirmation prompt.
+  function warnBeforeUnload() {
+    window.addEventListener('beforeunload', (e) => {
+      e.preventDefault();
+      e.returnValue = '';
+    });
   }
 
   // Requests a 5-character host ID from the broker (free public
@@ -232,8 +216,12 @@
       addPlayer({ id: conn.peer, name: msg.name });
       broadcastToClients({ type: 'players', players: state.players });
       render();
-    } else if (msg.type === 'playCard') {
-      applyPlay(conn.peer, msg.card);
+    } else if (msg.type === 'cardRemoved') {
+      addToPool(msg.card);
+    } else if (msg.type === 'requestSlip') {
+      const newCard = drawReplacement();
+      addToPool(msg.oldCard);
+      conn.send({ type: 'slipResult', idx: msg.idx, newCard });
     } else if (msg.type === 'handEmpty') {
       applyGameOver();
     }
@@ -258,46 +246,69 @@
   }
 
   function handleClientMessage(msg) {
-    if (msg.type === 'players') state.players = msg.players;
-    else if (msg.type === 'yourHand') { state.hand = msg.hand; state.gameStarted = true; }
-    else if (msg.type === 'cardPlayed') state.board.push({ playerId: msg.playerId, card: msg.card });
-    else if (msg.type === 'gameOver') state.gameOver = true;
+    if (msg.type === 'players') {
+      state.players = msg.players;
+    } else if (msg.type === 'yourHand') {
+      state.hand = msg.hand;
+      state.gameStarted = true;
+    } else if (msg.type === 'slipResult') {
+      state.hand[msg.idx] = msg.newCard;
+    } else if (msg.type === 'gameOver') {
+      state.gameOver = true;
+    }
     render();
   }
 
   function startGame() {
     const ids = state.players.map((p) => p.id);
     const hands = dealHands(MASTER_DECK, ids, HAND_SIZE);
+    state.pool = [];
     state.gameStarted = true;
     state.hand = hands[state.myId];
     Object.entries(state.conns).forEach(([id, conn]) => conn.send({ type: 'yourHand', hand: hands[id] }));
     render();
   }
 
-  function playCard(card) {
-    if (state.isHost) applyPlay(state.myId, card);
-    else state.hostConn.send({ type: 'playCard', card });
-  }
-
-  function applyPlay(playerId, card) {
-    state.board.push({ playerId, card });
-    broadcastToClients({ type: 'cardPlayed', playerId, card }, playerId);
-    render();
-  }
-
-  // Removes a card from the local hand entirely.
+  // Removes a card from the local hand entirely. It joins the shared
+  // pool of removed cards, so it can be drawn again later by anyone.
   function completeCard(idx) {
-    state.hand.splice(idx, 1);
+    const removed = state.hand.splice(idx, 1)[0];
+    if (state.isHost) {
+      addToPool(removed);
+    } else {
+      state.hostConn.send({ type: 'cardRemoved', card: removed });
+    }
     render();
     checkHandEmpty();
   }
 
-  // Swaps a card for a new random one from the master deck — purely
-  // local/private, no need to coordinate through the host.
+  // Swaps a card for a random one drawn from the shared pool of
+  // previously removed cards (falling back to the full master deck if
+  // the pool is empty). The old card then joins the pool itself, so
+  // it too can be drawn again later by anyone.
   function slipCard(idx) {
-    const replacement = MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
-    state.hand[idx] = replacement;
-    render();
+    const oldCard = state.hand[idx];
+    if (state.isHost) {
+      const newCard = drawReplacement();
+      addToPool(oldCard);
+      state.hand[idx] = newCard;
+      render();
+    } else {
+      state.hostConn.send({ type: 'requestSlip', idx, oldCard });
+    }
+  }
+
+  // Host-only: the shared, authoritative pool of removed cards.
+  function addToPool(card) {
+    state.pool.push(card);
+  }
+
+  function drawReplacement() {
+    if (state.pool.length > 0) {
+      const i = Math.floor(Math.random() * state.pool.length);
+      return state.pool.splice(i, 1)[0];
+    }
+    return MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
   }
 
   // When a player's hand hits zero, the game ends for everyone.
