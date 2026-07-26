@@ -81,8 +81,13 @@
       align-items: center;
       gap: 8px;
     }
-    .draw-btn {
-      align-self: center;
+    .footer-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .draw-btn, .catch-slip-btn, .not-caught-btn {
       background: #4a7a4a;
       color: #eee;
       border: none;
@@ -92,7 +97,9 @@
       cursor: pointer;
       min-height: 40px;
     }
-    .draw-btn:active { filter: brightness(1.2); }
+    .catch-slip-btn { background: #7a5a2a; }
+    .not-caught-btn { background: #7a2a2a; }
+    .draw-btn:active, .catch-slip-btn:active, .not-caught-btn:active { filter: brightness(1.2); }
 
     .card {
       background: #3d3d5c; border-radius: 8px; padding: 12px; margin: 10px 0;
@@ -104,7 +111,6 @@
       border: none; cursor: pointer; color: #eee; min-height: 40px;
     }
     .complete-btn { background: #4a5a7a; }
-    .slip-btn { background: #7a4a4a; }
     .card-actions button:active { filter: brightness(1.2); }
     .card-actions button:disabled { opacity: 0.35; cursor: not-allowed; filter: none; }
 

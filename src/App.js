@@ -19,9 +19,11 @@ export function App(root) {
     hostConn: null,       // client -> host connection
     conns: {},            // host -> map of peerId -> connection
     players: [],          // [{ id, name }], host first
-    hand: [],             // [{ id, text, pending, pendingUntil }]
+    hand: [],             // [{ id, text, pending, remainingMs }]
     handSize: HAND_SIZE,  // host-adjustable: 3, 5, or 10 cards per player
     pendingCompleteId: null, // id of this player's own in-flight Complete, if any
+    slipCheckActive: false,  // true while a "Catch a Slip" challenge has
+                              // paused every pending Complete, everywhere
     gameStarted: false,
     gameOver: false,
     winnerName: null,
@@ -30,15 +32,95 @@ export function App(root) {
     joinError: null
   };
 
-  let pendingTickInterval = null;
-  const pendingTimers = {}; // host-only: cardId -> setTimeout handle, so a
-                             // Complete-in-progress can be cancelled by "Caught!"
+  // Host-only: cardId -> { playerId, cardText, remainingMs, timeoutId, startedAt }
+  // Tracks every in-flight Complete across every player so a global
+  // "Catch a Slip" can pause and resume all of them together.
+  const pendingRegistry = {};
+
+  function startPendingTimer(playerId, cardId, cardText, durationMs) {
+    pendingRegistry[cardId] = { playerId, cardText, remainingMs: durationMs, timeoutId: null, startedAt: null };
+    if (!state.slipCheckActive) {
+      runPendingTimer(cardId);
+    }
+    // If a slip-check is already in progress when this timer starts,
+    // it's left paused (no timeoutId) until that check resolves.
+  }
+
+  function runPendingTimer(cardId) {
+    const entry = pendingRegistry[cardId];
+    if (!entry) return;
+    entry.startedAt = Date.now();
+    entry.timeoutId = setTimeout(() => {
+      delete pendingRegistry[cardId];
+      resolvePendingComplete(entry.playerId, cardId, entry.cardText);
+    }, entry.remainingMs);
+  }
+
+  function pauseAllPendingTimers() {
+    Object.values(pendingRegistry).forEach((entry) => {
+      if (entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+        entry.remainingMs = Math.max(0, entry.remainingMs - (Date.now() - entry.startedAt));
+        entry.timeoutId = null;
+        entry.startedAt = null;
+      }
+    });
+  }
+
+  function resumeAllPendingTimers() {
+    Object.keys(pendingRegistry).forEach((cardId) => {
+      const entry = pendingRegistry[cardId];
+      if (entry && entry.timeoutId === null) runPendingTimer(cardId);
+    });
+  }
+
   function cancelPendingTimer(cardId) {
-    if (pendingTimers[cardId]) {
-      clearTimeout(pendingTimers[cardId]);
-      delete pendingTimers[cardId];
+    const entry = pendingRegistry[cardId];
+    if (entry) {
+      if (entry.timeoutId) clearTimeout(entry.timeoutId);
+      delete pendingRegistry[cardId];
     }
   }
+
+  // Host-only: a card's 30 seconds have genuinely run out. Announces
+  // it to everyone and tells the owning player's client (if it's not
+  // this host itself) to actually resolve its own hand.
+  function resolvePendingComplete(playerId, cardId, cardText) {
+    const player = state.players.find((p) => p.id === playerId);
+    const playerName = player ? player.name : 'A player';
+    const text = `${playerName} has slipped in ${cardText}`;
+    pushAnnouncement(text);
+    broadcastToClients({ type: 'announcement', text });
+
+    if (playerId === state.myId) {
+      resolveOwnPendingComplete(cardId);
+    } else if (state.conns[playerId]) {
+      state.conns[playerId].send({ type: 'completeResolved', cardId });
+    }
+  }
+
+  // Host-only: any player calling "Catch a Slip" pauses every pending
+  // Complete, everywhere, until someone gets caught or it's called off.
+  function triggerSlipCheck() {
+    if (state.slipCheckActive) return;
+    state.slipCheckActive = true;
+    pauseAllPendingTimers();
+    broadcastToClients({ type: 'slipCheckState', active: true });
+    render();
+  }
+
+  // Host-only: resolves a slip-check — either "Not Caught" (nothing
+  // found, resume as normal) or because a specific card just got
+  // "Caught!"ed. Either way, everything paused resumes.
+  function resolveSlipCheck() {
+    if (!state.slipCheckActive) return;
+    state.slipCheckActive = false;
+    resumeAllPendingTimers();
+    broadcastToClients({ type: 'slipCheckState', active: false });
+    render();
+  }
+
+  let pendingTickInterval = null;
   function startPendingTicker() {
     if (pendingTickInterval) return;
     pendingTickInterval = setInterval(() => {
@@ -46,6 +128,10 @@ export function App(root) {
         clearInterval(pendingTickInterval);
         pendingTickInterval = null;
         return;
+      }
+      if (!state.slipCheckActive) {
+        const card = state.hand.find((c) => c.id === state.pendingCompleteId);
+        if (card) card.remainingMs = Math.max(0, card.remainingMs - 1000);
       }
       render();
     }, 1000);
@@ -140,11 +226,11 @@ export function App(root) {
           <h3>Your Hand</h3>
           ${state.hand.map((c) => {
             if (c.pending) {
-              const secondsLeft = Math.max(0, Math.ceil((c.pendingUntil - Date.now()) / 1000));
+              const secondsLeft = Math.ceil((c.remainingMs || 0) / 1000);
               return `
                 <div class="card card-pending">
                   <div class="card-text">${c.text}</div>
-                  <div class="pending-label">Clearing in ${secondsLeft}s...</div>
+                  <div class="pending-label">${state.slipCheckActive ? 'Frozen — someone called Catch a Slip!' : `Clearing in ${secondsLeft}s...`}</div>
                   <div class="card-actions">
                     <button class="catch-btn" data-id="${c.id}">Caught!</button>
                   </div>
@@ -156,7 +242,6 @@ export function App(root) {
                 <div class="card-text">${c.text}</div>
                 <div class="card-actions">
                   <button class="complete-btn" data-id="${c.id}" ${completeDisabled ? 'disabled' : ''}>Complete</button>
-                  <button class="slip-btn" data-id="${c.id}">Caught Slipping</button>
                 </div>
               </div>`;
           }).join('')}
@@ -165,19 +250,18 @@ export function App(root) {
           <div class="player-list">
             ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
           </div>
-          <button id="drawCardBtn" class="draw-btn">Draw 1 Card</button>
+          <div class="footer-actions">
+            <button id="drawCardBtn" class="draw-btn">Draw 1 Card</button>
+            ${state.slipCheckActive
+              ? `<button id="notCaughtBtn" class="not-caught-btn">Not Caught</button>`
+              : `<button id="catchSlipBtn" class="catch-slip-btn">Catch a Slip</button>`}
+          </div>
         </div>
       </div>`;
 
     root.querySelectorAll('.complete-btn').forEach((el) => {
       el.addEventListener('click', () => {
         completeCard(el.getAttribute('data-id'));
-      });
-    });
-
-    root.querySelectorAll('.slip-btn').forEach((el) => {
-      el.addEventListener('click', () => {
-        slipCard(el.getAttribute('data-id'));
       });
     });
 
@@ -190,6 +274,12 @@ export function App(root) {
     root.querySelector('#drawCardBtn').onclick = () => {
       drawOneCard();
     };
+
+    const catchSlipBtn = root.querySelector('#catchSlipBtn');
+    if (catchSlipBtn) catchSlipBtn.onclick = () => catchASlip();
+
+    const notCaughtBtn = root.querySelector('#notCaughtBtn');
+    if (notCaughtBtn) notCaughtBtn.onclick = () => notCaught();
   }
 
   function broadcastToClients(msg, exceptId) {
@@ -256,9 +346,7 @@ export function App(root) {
       // message that arrives right at connection time can never race
       // ahead of state.conns being populated for this player.
       state.conns[conn.peer] = conn;
-
       conn.on('data', (msg) => handleHostMessage(conn, msg));
-
       conn.on('close', () => {
         removePlayer(conn.peer);
         broadcastToClients({ type: 'players', players: state.players });
@@ -274,17 +362,19 @@ export function App(root) {
       broadcastToClients({ type: 'players', players: state.players });
       render();
     } else if (msg.type === 'completeStarted') {
-      schedulePendingComplete(conn.peer, msg.cardId, msg.card);
-    } else if (msg.type === 'requestSlip') {
-      const newCard = drawReplacement();
-      conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
+      startPendingTimer(conn.peer, msg.cardId, msg.card, 30000);
     } else if (msg.type === 'catchSlip') {
       cancelPendingTimer(msg.cardId);
       const newCard = drawReplacement();
       conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
+      if (state.slipCheckActive) resolveSlipCheck();
     } else if (msg.type === 'requestDraw') {
       const newCard = drawReplacement();
       conn.send({ type: 'drawResult', newCard });
+    } else if (msg.type === 'catchASlipRequest') {
+      triggerSlipCheck();
+    } else if (msg.type === 'notCaughtRequest') {
+      resolveSlipCheck();
     } else if (msg.type === 'handEmpty') {
       const player = state.players.find((p) => p.id === conn.peer);
       const winnerName = player ? player.name : 'A player';
@@ -332,8 +422,9 @@ export function App(root) {
       const me = state.players.find((p) => p.id === state.myId);
       if (me) state.myName = me.name;
     } else if (msg.type === 'yourHand') {
-      state.hand = msg.hand.map((text) => ({ id: generateCardId(), text, pending: false, pendingUntil: null }));
+      state.hand = msg.hand.map((text) => ({ id: generateCardId(), text, pending: false }));
       state.pendingCompleteId = null;
+      state.slipCheckActive = false;
       state.gameStarted = true;
       state.gameOver = false;
       state.winnerName = null;
@@ -341,9 +432,11 @@ export function App(root) {
       const card = state.hand.find((c) => c.id === msg.cardId);
       if (card) card.text = msg.newCard;
     } else if (msg.type === 'drawResult') {
-      state.hand.push({ id: generateCardId(), text: msg.newCard, pending: false, pendingUntil: null });
+      state.hand.push({ id: generateCardId(), text: msg.newCard, pending: false });
     } else if (msg.type === 'completeResolved') {
       resolveOwnPendingComplete(msg.cardId);
+    } else if (msg.type === 'slipCheckState') {
+      state.slipCheckActive = msg.active;
     } else if (msg.type === 'gameOver') {
       state.gameOver = true;
       state.winnerName = msg.winnerName;
@@ -360,7 +453,8 @@ export function App(root) {
     state.gameOver = false;
     state.winnerName = null;
     state.pendingCompleteId = null;
-    state.hand = hands[state.myId].map((text) => ({ id: generateCardId(), text, pending: false, pendingUntil: null }));
+    state.slipCheckActive = false;
+    state.hand = hands[state.myId].map((text) => ({ id: generateCardId(), text, pending: false }));
     Object.entries(state.conns).forEach(([id, conn]) => {
       conn.send({ type: 'yourHand', hand: hands[id] });
     });
@@ -369,55 +463,38 @@ export function App(root) {
 
   // Starts the 30-second Complete process for one of this player's own
   // cards. The card stays visible (marked pending) until it actually
-  // resolves — it isn't removed from the hand until then. While a
-  // card is pending, this player can't start Completing another one,
-  // but Caught Slipping and every other player remain unaffected.
+  // resolves. While a card is pending, this player can't start
+  // Completing another one, but every other player remains unaffected
+  // — until someone calls "Catch a Slip", which pauses everyone's
+  // pending cards at once.
   function completeCard(cardId) {
     if (state.pendingCompleteId) return;
     const card = state.hand.find((c) => c.id === cardId);
     if (!card || card.pending) return;
 
     card.pending = true;
-    card.pendingUntil = Date.now() + 30000;
+    card.remainingMs = 30000;
     state.pendingCompleteId = cardId;
     startPendingTicker();
 
     if (state.isHost) {
-      schedulePendingComplete(state.myId, cardId, card.text);
+      startPendingTimer(state.myId, cardId, card.text, 30000);
     } else {
       state.hostConn.send({ type: 'completeStarted', cardId, card: card.text });
     }
     render();
   }
 
-  // Swaps a card for a new one, drawn uniformly at random from the
-  // full master deck. The deck itself is never consumed by dealing or
-  // by this draw, so any card — including ones sitting in someone
-  // else's hand or already completed — can always come up again for
-  // anyone. Not available on a card that's currently pending a
-  // Complete.
-  function slipCard(cardId) {
-    const card = state.hand.find((c) => c.id === cardId);
-    if (!card || card.pending) return;
-    if (state.isHost) {
-      card.text = drawReplacement();
-      render();
-    } else {
-      state.hostConn.send({ type: 'requestSlip', cardId });
-    }
-  }
-
   // Cancels an in-flight Complete countdown early and draws a new
-  // random card in its place — functionally identical to Caught
-  // Slipping, just reachable from the pending-card state instead of
-  // waiting out (or letting run) the 30-second timer. No announcement
-  // fires, since the Complete never actually resolved.
+  // random card in its place. No announcement fires, since the
+  // Complete never actually resolved. If a "Catch a Slip" challenge
+  // was in progress, being Caught! resolves it — everyone else's
+  // paused timers resume.
   function catchCard(cardId) {
     const card = state.hand.find((c) => c.id === cardId);
     if (!card || !card.pending) return;
 
     card.pending = false;
-    card.pendingUntil = null;
     if (state.pendingCompleteId === cardId) {
       state.pendingCompleteId = null;
       if (pendingTickInterval) {
@@ -429,6 +506,7 @@ export function App(root) {
     if (state.isHost) {
       cancelPendingTimer(cardId);
       card.text = drawReplacement();
+      if (state.slipCheckActive) resolveSlipCheck();
     } else {
       state.hostConn.send({ type: 'catchSlip', cardId });
     }
@@ -440,41 +518,39 @@ export function App(root) {
   function drawOneCard() {
     if (state.isHost) {
       const text = drawReplacement();
-      state.hand.push({ id: generateCardId(), text, pending: false, pendingUntil: null });
+      state.hand.push({ id: generateCardId(), text, pending: false });
       render();
     } else {
       state.hostConn.send({ type: 'requestDraw' });
     }
   }
 
-  // Host-only: runs the 30-second timer for one player's Complete
-  // action. The player's name and the card text are captured right
-  // now, in this closure — so even if that player disconnects before
-  // the timer fires, the announcement still fires on schedule. Only
-  // the final "your card is cleared" notice back to that specific
-  // player is skipped if they're no longer connected.
-  function schedulePendingComplete(playerId, cardId, cardText) {
-    const player = state.players.find((p) => p.id === playerId);
-    const playerName = player ? player.name : 'A player';
+  // Calls a "Catch a Slip" challenge: pauses every pending Complete,
+  // for every player, until someone gets Caught! or it's called off
+  // with Not Caught. Anyone can call this — the whole point is that
+  // hands are private, so you never know for certain who (if anyone)
+  // currently has a card counting down.
+  function catchASlip() {
+    if (state.isHost) {
+      triggerSlipCheck();
+    } else {
+      state.hostConn.send({ type: 'catchASlipRequest' });
+    }
+  }
 
-    const timeoutId = setTimeout(() => {
-      delete pendingTimers[cardId];
-      const text = `${playerName} has slipped in ${cardText}`;
-      pushAnnouncement(text);
-      broadcastToClients({ type: 'announcement', text });
-
-      if (playerId === state.myId) {
-        resolveOwnPendingComplete(cardId);
-      } else if (state.conns[playerId]) {
-        state.conns[playerId].send({ type: 'completeResolved', cardId });
-      }
-    }, 30000);
-    pendingTimers[cardId] = timeoutId;
+  // Calls off an active "Catch a Slip" challenge with no card caught —
+  // every paused timer resumes exactly where it left off.
+  function notCaught() {
+    if (state.isHost) {
+      resolveSlipCheck();
+    } else {
+      state.hostConn.send({ type: 'notCaughtRequest' });
+    }
   }
 
   // Called on the completing player's own client once their card's
-  // 30-second timer has actually elapsed: only now does it leave the
-  // hand, and only now is the hand checked for the win condition.
+  // timer has actually elapsed: only now does it leave the hand, and
+  // only now is the hand checked for the win condition.
   function resolveOwnPendingComplete(cardId) {
     state.hand = state.hand.filter((c) => c.id !== cardId);
     if (state.pendingCompleteId === cardId) {
@@ -508,15 +584,14 @@ export function App(root) {
 
   // The deck itself is never consumed — dealing only copies out of it,
   // never removes from it — so every draw samples uniformly across
-  // the whole deck, and anything already in play or already completed
-  // remains just as likely to come up as anything else.
+  // the whole deck.
   function drawReplacement() {
     return MASTER_DECK[Math.floor(Math.random() * MASTER_DECK.length)];
   }
 
   // When a player's hand hits zero — which, for a Complete action,
-  // only happens once its 30-second timer has actually resolved — the
-  // game ends for everyone, naming that player as the winner.
+  // only happens once its timer has actually resolved — the game
+  // ends for everyone, naming that player as the winner.
   function checkHandEmpty() {
     if (state.hand.length === 0 && !state.gameOver) {
       if (state.isHost) {

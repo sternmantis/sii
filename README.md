@@ -55,43 +55,46 @@ screens without a separate mobile version.
    **3, 5, or 10** — via a dropdown in the waiting room. Once 2–4
    players have joined, the host clicks **Start Game** to shuffle
    `deck.js` and deal that many cards to each player privately.
-4. There is no shared board. Each card in your hand has exactly two
-   actions:
-   - **Complete** — starts a 30-second countdown on that card. It
-     stays in your hand (visibly marked, no longer clickable) for the
-     full 30 seconds — it does **not** disappear or join the shared
-     pool right away. While the countdown runs, that card shows a
-     **Caught!** button — clicking it cancels the countdown early and
-     immediately swaps the card for a new random one, functionally
-     identical to Caught Slipping, with no announcement (since the
-     Complete never actually resolved). If you don't hit Caught!,
-     once the 30 seconds elapse the card leaves your hand and every
-     player is notified with a toast: "**[Player] has slipped in
-     [card text]**". While you have a card counting down, you can't
-     start Completing another one, but Caught Slipping still works
-     normally on your other cards, and every other player is
-     completely unaffected. This timer runs on the host, not on your
-     own device, so it still resolves (or can still be Caught!) on
-     schedule even if you disconnect right after starting it.
-   - **Caught Slipping** — swaps the card for a new one, drawn
-     uniformly at random from the full master deck. The deck itself
-     is never consumed by dealing or by this draw, so any card —
-     including ones already sitting in someone else's hand, or ones
-     someone already completed — remains just as likely to come up as
-     anything else. Your hand size doesn't change, and there's no
-     delay or announcement for this action. Not available on a card
-     that's currently counting down from a Complete.
+4. There is no shared board. Each card in your hand has one action —
+   **Complete** — which starts a 30-second countdown on that card. It
+   stays in your hand (visibly marked, no longer clickable) for those
+   30 seconds — it does **not** disappear right away. While it's
+   counting down, that card shows a **Caught!** button instead —
+   clicking it cancels the countdown early and immediately swaps the
+   card for a new random one, drawn uniformly from the full master
+   deck. If nobody hits Caught! before time runs out, the card leaves
+   your hand and every player is notified with a toast: "**[Player]
+   has slipped in [card text]**". While you have a card counting
+   down, you can't start Completing another one, but every other
+   player is completely unaffected — until someone calls Catch a Slip
+   (below). This timer runs on the host, not on your own device, so it
+   still resolves (or can still be Caught!) on schedule even if you
+   disconnect right after starting it.
 
-   At the bottom of the screen, a **Draw 1 Card** button adds one
-   extra randomly-drawn card to your own hand at any time — this
-   grows your hand rather than swapping anything.
+   At the bottom of the screen, three shared controls are visible to
+   everyone:
+   - **Draw 1 Card** — adds one extra randomly-drawn card to your own
+     hand at any time. This grows your hand rather than swapping
+     anything.
+   - **Catch a Slip** — since hands are private, nobody can see who
+     (if anyone) currently has a card counting down. Anyone can call
+     this at any time to pause *every* in-progress Complete countdown,
+     for every player, all at once. Once called, this button is
+     replaced with **Not Caught** for everyone until the challenge is
+     resolved.
+   - **Not Caught** — shown only while a Catch a Slip challenge is
+     active. Clicking it (anyone can) calls off the challenge with
+     nothing found — every paused countdown resumes exactly where it
+     left off. A challenge also resolves automatically the instant
+     anyone hits **Caught!** on their own pending card: the search is
+     over, and everyone else's paused countdowns resume too.
 5. As soon as any player's hand actually reaches zero cards — which,
-   for a Complete action, only happens once its 30-second countdown
-   has finished, not the moment the button is pressed — that player is
-   declared the winner and the game ends for everyone. A "Game Over"
-   screen names them specifically (e.g. "**binker** ran out of cards
-   and wins!"). Any Complete countdowns already running elsewhere at
-   that point still finish on their original schedule, even after game
+   for a Complete action, only happens once its countdown has finished
+   (and it wasn't sitting paused by a Catch a Slip at that moment) —
+   that player is declared the winner and the game ends for everyone.
+   A "Game Over" screen names them specifically (e.g. "**binker** ran
+   out of cards and wins!"). Any Complete countdowns already running
+   elsewhere at that point still finish on schedule, even after game
    over.
 6. From the Game Over screen, the host can click **Start New Game** to
    deal a fresh hand to the same connected players and jump straight
