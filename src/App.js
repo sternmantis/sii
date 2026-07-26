@@ -31,6 +31,14 @@ export function App(root) {
   };
 
   let pendingTickInterval = null;
+  const pendingTimers = {}; // host-only: cardId -> setTimeout handle, so a
+                             // Complete-in-progress can be cancelled by "Caught!"
+  function cancelPendingTimer(cardId) {
+    if (pendingTimers[cardId]) {
+      clearTimeout(pendingTimers[cardId]);
+      delete pendingTimers[cardId];
+    }
+  }
   function startPendingTicker() {
     if (pendingTickInterval) return;
     pendingTickInterval = setInterval(() => {
@@ -137,6 +145,9 @@ export function App(root) {
                 <div class="card card-pending">
                   <div class="card-text">${c.text}</div>
                   <div class="pending-label">Clearing in ${secondsLeft}s...</div>
+                  <div class="card-actions">
+                    <button class="catch-btn" data-id="${c.id}">Caught!</button>
+                  </div>
                 </div>`;
             }
             const completeDisabled = !!state.pendingCompleteId;
@@ -150,8 +161,11 @@ export function App(root) {
               </div>`;
           }).join('')}
         </div>
-        <div class="player-list">
-          ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
+        <div class="footer-bar">
+          <div class="player-list">
+            ${state.players.map(p => `<span class="player-chip">${p.name}${p.id === state.myId ? ' (you)' : ''}</span>`).join('')}
+          </div>
+          <button id="drawCardBtn" class="draw-btn">Draw 1 Card</button>
         </div>
       </div>`;
 
@@ -166,6 +180,16 @@ export function App(root) {
         slipCard(el.getAttribute('data-id'));
       });
     });
+
+    root.querySelectorAll('.catch-btn').forEach((el) => {
+      el.addEventListener('click', () => {
+        catchCard(el.getAttribute('data-id'));
+      });
+    });
+
+    root.querySelector('#drawCardBtn').onclick = () => {
+      drawOneCard();
+    };
   }
 
   function broadcastToClients(msg, exceptId) {
@@ -254,6 +278,13 @@ export function App(root) {
     } else if (msg.type === 'requestSlip') {
       const newCard = drawReplacement();
       conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
+    } else if (msg.type === 'catchSlip') {
+      cancelPendingTimer(msg.cardId);
+      const newCard = drawReplacement();
+      conn.send({ type: 'slipResult', cardId: msg.cardId, newCard });
+    } else if (msg.type === 'requestDraw') {
+      const newCard = drawReplacement();
+      conn.send({ type: 'drawResult', newCard });
     } else if (msg.type === 'handEmpty') {
       const player = state.players.find((p) => p.id === conn.peer);
       const winnerName = player ? player.name : 'A player';
@@ -309,6 +340,8 @@ export function App(root) {
     } else if (msg.type === 'slipResult') {
       const card = state.hand.find((c) => c.id === msg.cardId);
       if (card) card.text = msg.newCard;
+    } else if (msg.type === 'drawResult') {
+      state.hand.push({ id: generateCardId(), text: msg.newCard, pending: false, pendingUntil: null });
     } else if (msg.type === 'completeResolved') {
       resolveOwnPendingComplete(msg.cardId);
     } else if (msg.type === 'gameOver') {
@@ -374,6 +407,46 @@ export function App(root) {
     }
   }
 
+  // Cancels an in-flight Complete countdown early and draws a new
+  // random card in its place — functionally identical to Caught
+  // Slipping, just reachable from the pending-card state instead of
+  // waiting out (or letting run) the 30-second timer. No announcement
+  // fires, since the Complete never actually resolved.
+  function catchCard(cardId) {
+    const card = state.hand.find((c) => c.id === cardId);
+    if (!card || !card.pending) return;
+
+    card.pending = false;
+    card.pendingUntil = null;
+    if (state.pendingCompleteId === cardId) {
+      state.pendingCompleteId = null;
+      if (pendingTickInterval) {
+        clearInterval(pendingTickInterval);
+        pendingTickInterval = null;
+      }
+    }
+
+    if (state.isHost) {
+      cancelPendingTimer(cardId);
+      card.text = drawReplacement();
+    } else {
+      state.hostConn.send({ type: 'catchSlip', cardId });
+    }
+    render();
+  }
+
+  // Adds one extra randomly-drawn card to this player's hand, growing
+  // it by one — not a swap, just an additional card.
+  function drawOneCard() {
+    if (state.isHost) {
+      const text = drawReplacement();
+      state.hand.push({ id: generateCardId(), text, pending: false, pendingUntil: null });
+      render();
+    } else {
+      state.hostConn.send({ type: 'requestDraw' });
+    }
+  }
+
   // Host-only: runs the 30-second timer for one player's Complete
   // action. The player's name and the card text are captured right
   // now, in this closure — so even if that player disconnects before
@@ -384,7 +457,8 @@ export function App(root) {
     const player = state.players.find((p) => p.id === playerId);
     const playerName = player ? player.name : 'A player';
 
-    setTimeout(() => {
+    const timeoutId = setTimeout(() => {
+      delete pendingTimers[cardId];
       const text = `${playerName} has slipped in ${cardText}`;
       pushAnnouncement(text);
       broadcastToClients({ type: 'announcement', text });
@@ -395,6 +469,7 @@ export function App(root) {
         state.conns[playerId].send({ type: 'completeResolved', cardId });
       }
     }, 30000);
+    pendingTimers[cardId] = timeoutId;
   }
 
   // Called on the completing player's own client once their card's

@@ -60,15 +60,19 @@ screens without a separate mobile version.
    - **Complete** — starts a 30-second countdown on that card. It
      stays in your hand (visibly marked, no longer clickable) for the
      full 30 seconds — it does **not** disappear or join the shared
-     pool right away. While you have a card counting down, you can't
+     pool right away. While the countdown runs, that card shows a
+     **Caught!** button — clicking it cancels the countdown early and
+     immediately swaps the card for a new random one, functionally
+     identical to Caught Slipping, with no announcement (since the
+     Complete never actually resolved). If you don't hit Caught!,
+     once the 30 seconds elapse the card leaves your hand and every
+     player is notified with a toast: "**[Player] has slipped in
+     [card text]**". While you have a card counting down, you can't
      start Completing another one, but Caught Slipping still works
      normally on your other cards, and every other player is
-     completely unaffected. Once the 30 seconds actually elapse, the
-     card leaves your hand, joins the shared pool, and every player is
-     notified with a toast: "**[Player] has slipped in [card text]**".
-     This timer runs on the host, not on your own device, so it still
-     resolves on schedule even if you disconnect right after starting
-     it.
+     completely unaffected. This timer runs on the host, not on your
+     own device, so it still resolves (or can still be Caught!) on
+     schedule even if you disconnect right after starting it.
    - **Caught Slipping** — swaps the card for a new one, drawn
      uniformly at random from the full master deck. The deck itself
      is never consumed by dealing or by this draw, so any card —
@@ -77,6 +81,10 @@ screens without a separate mobile version.
      anything else. Your hand size doesn't change, and there's no
      delay or announcement for this action. Not available on a card
      that's currently counting down from a Complete.
+
+   At the bottom of the screen, a **Draw 1 Card** button adds one
+   extra randomly-drawn card to your own hand at any time — this
+   grows your hand rather than swapping anything.
 5. As soon as any player's hand actually reaches zero cards — which,
    for a Complete action, only happens once its 30-second countdown
    has finished, not the moment the button is pressed — that player is
